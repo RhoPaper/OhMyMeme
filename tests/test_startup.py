@@ -1133,3 +1133,162 @@ def test_storage_dir_validation(tmp_path):
     assert _storage_dir_validation(str(data / "x"), str(old), (data,))[0] is False
     assert _storage_dir_validation(str(tmp_path), str(old), (data,))[0] is False
     assert _storage_dir_validation(str(tmp_path / "ok"), str(old), (data,))[0] is True
+
+
+def _fake_frontend_root(tmp_path):
+    root = tmp_path / "proj"
+    (root / "src" / "vue-src").mkdir(parents=True)
+    (root / "src" / "webui" / "dist").mkdir(parents=True)
+    (root / "package.json").write_text("{}", encoding="utf-8")
+    (root / "package-lock.json").write_text("{}", encoding="utf-8")
+    (root / "vite.config.ts").write_text("", encoding="utf-8")
+    (root / "src" / "vue-src" / "App.vue").write_text("<template/>", encoding="utf-8")
+    return root
+
+
+def _patch_frontend_root(monkeypatch, root):
+    # _ensure_vue_frontend 按 main.py 位置推导项目根
+    import src.main as app_main
+
+    monkeypatch.setattr(app_main, "__file__", str(root / "src" / "main.py"))
+
+
+def test_frontend_needs_build_when_dist_missing(tmp_path):
+    from src.main import frontend_needs_build
+
+    assert frontend_needs_build(_fake_frontend_root(tmp_path)) is True
+
+
+def test_frontend_needs_build_false_when_dist_newer(tmp_path):
+    from src.main import frontend_needs_build
+
+    root = _fake_frontend_root(tmp_path)
+    dist = root / "src" / "webui" / "dist" / "ohmymeme.js"
+    dist.write_text("// built", encoding="utf-8")
+    old = 1600000000
+    for p in (
+        root / "package.json",
+        root / "package-lock.json",
+        root / "vite.config.ts",
+        root / "src" / "vue-src" / "App.vue",
+    ):
+        os.utime(p, (old, old))
+    os.utime(dist, (old + 60, old + 60))
+    assert frontend_needs_build(root) is False
+
+
+def test_frontend_needs_build_true_when_source_newer(tmp_path):
+    from src.main import frontend_needs_build
+
+    root = _fake_frontend_root(tmp_path)
+    dist = root / "src" / "webui" / "dist" / "ohmymeme.js"
+    dist.write_text("// built", encoding="utf-8")
+    old = 1600000000
+    os.utime(dist, (old, old))
+    os.utime(root / "src" / "vue-src" / "App.vue", (old + 60, old + 60))
+    assert frontend_needs_build(root) is True
+
+
+def test_ensure_vue_frontend_installs_deps_then_builds(tmp_path, monkeypatch):
+    import src.main as app_main
+
+    root = _fake_frontend_root(tmp_path)
+    _patch_frontend_root(monkeypatch, root)
+    calls = []
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[-1] == "build":
+            (root / "src" / "webui" / "dist" / "ohmymeme.js").write_text("// built")
+        return _Result()
+
+    monkeypatch.setattr(app_main.subprocess, "run", fake_run)
+    app_main._ensure_vue_frontend()
+    assert [c[1] for c in calls] == ["ci", "vite"]
+    assert (root / "src" / "webui" / "dist" / "ohmymeme.js").exists()
+
+
+def test_ensure_vue_frontend_skips_when_fresh(tmp_path, monkeypatch):
+    import src.main as app_main
+
+    root = _fake_frontend_root(tmp_path)
+    dist = root / "src" / "webui" / "dist" / "ohmymeme.js"
+    dist.write_text("// built", encoding="utf-8")
+    old = 1600000000
+    os.utime(root / "src" / "vue-src" / "App.vue", (old, old))
+    os.utime(dist, (old + 60, old + 60))
+    _patch_frontend_root(monkeypatch, root)
+
+    def fake_run(cmd, **kwargs):
+        raise AssertionError("产物新鲜时不应构建: %s" % cmd)
+
+    monkeypatch.setattr(app_main.subprocess, "run", fake_run)
+    app_main._ensure_vue_frontend()
+
+
+def test_ensure_vue_frontend_skips_when_frozen(tmp_path, monkeypatch):
+    import src.main as app_main
+
+    _patch_frontend_root(monkeypatch, _fake_frontend_root(tmp_path))
+    monkeypatch.setattr(app_main.sys, "frozen", True, raising=False)
+
+    def fake_run(cmd, **kwargs):
+        raise AssertionError("打包环境不应构建: %s" % cmd)
+
+    monkeypatch.setattr(app_main.subprocess, "run", fake_run)
+    app_main._ensure_vue_frontend()
+
+
+def test_ensure_vue_frontend_reinstalls_deps_when_build_fails(tmp_path, monkeypatch):
+    import src.main as app_main
+
+    root = _fake_frontend_root(tmp_path)
+    (root / "node_modules").mkdir()
+    dist = root / "src" / "webui" / "dist" / "ohmymeme.js"
+    _patch_frontend_root(monkeypatch, root)
+    calls = []
+
+    class _Result:
+        def __init__(self, code):
+            self.returncode = code
+            self.stdout = "boom"
+            self.stderr = "boom"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[1] == "vite" and len(calls) > 1:
+            dist.write_text("// built")
+            return _Result(0)
+        return _Result(1 if cmd[1] == "vite" else 0)
+
+    monkeypatch.setattr(app_main.subprocess, "run", fake_run)
+    app_main._ensure_vue_frontend()
+    # 已有 node_modules 先直接构建，失败后补装依赖再构建
+    assert [c[1] for c in calls] == ["vite", "ci", "vite"]
+    assert dist.exists()
+
+
+def test_ensure_vue_frontend_failure_is_not_fatal(tmp_path, monkeypatch):
+    import src.main as app_main
+
+    _patch_frontend_root(monkeypatch, _fake_frontend_root(tmp_path))
+    calls = []
+
+    class _Result:
+        returncode = 1
+        stdout = "boom"
+        stderr = "boom"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return _Result()
+
+    monkeypatch.setattr(app_main.subprocess, "run", fake_run)
+    app_main._ensure_vue_frontend()
+    # 装依赖失败即停止，不继续构建，也不抛异常阻断启动
+    assert [c[1] for c in calls] == ["ci"]

@@ -52,7 +52,7 @@ pip install -r requirements.txt
 python -m src
 ```
 
-- 主窗口前端为 Vue 3，源码运行时若构建产物缺失会自动执行一次 `npx vite build`
+- 主窗口前端为 Vue 3，源码运行时若构建产物缺失或已过期会自动安装依赖并重新构建（需 Node.js/npm）
 - Linux 额外需要 GTK/WebKit 依赖（`python3-gi` + `gir1.2-webkit2-*`），详见 [CONTRIBUTING.md](CONTRIBUTING.md)
 
 或使用 conda：

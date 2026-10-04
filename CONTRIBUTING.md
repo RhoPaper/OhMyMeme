@@ -15,7 +15,8 @@ python -m src
 ```
 
 - 主窗口前端为 **Vue 3**（`src/vue-src/`，Vite 构建 IIFE 单文件 → `src/webui/dist/ohmymeme.js`，产物被 gitignore）
-- 源码运行时若前端产物缺失会自动执行一次 `npx vite build`；**修改前端后手动重新构建**：`npx vite build`
+- 源码运行时若前端产物缺失或比 `src/vue-src/` 旧，会自动 `npm ci`（首次，无 lockfile 则 `npm install`）+ `npx vite build`；**修改前端后手动重新构建**：`npx vite build`
+- 前端产物过期（源码更新后未重建）会导致界面与后端接口不符，启动时会自动重建并在日志中告警；产物不可用则回退旧主窗口（图片/功能可能异常），日志同样给出提示
 - 设置窗口为 vanilla 前端（`src/webui/settings.*`，独立 webview，无需构建）
 - 旧主窗口（`src/webui/index.*`）已备份至 `src/webui-backup/`，不再使用
 
@@ -84,7 +85,7 @@ python -m pytest tests/ -v
 
 - JS 调用后端：`pywebview.api.method(...)` → 自动序列化；辅助函数 `async function api(method, ...args) { return await pywebview.api[method](...args); }`
 - 返回类型 `str`/`int`/`bool`/`dict`/`list`，错误返回 `None` 或 `{"ok": false, "error": "..."}`
-- 图片不走 JS API JSON：缩略图通过 `/api/thumb/{id}` HTTP 路由渲染
+- 图片不走 JS API JSON：缩略图通过 `/api/thumb/{sha256}` HTTP 路由渲染（`file_hash`，与远端 `thumbnails/{sha256}.webp` 同名）
 - XSS 防护：拼入 innerHTML 的外部/动态数据必须经 `esc()`/`renderMarkdown()` 转义（主窗口 `utils/api.ts`，设置窗口 `settings.js` 同理）
 - 主窗口状态：`useMemes` composable 为唯一真源，拖拽等交互先改模型再挪 DOM
 

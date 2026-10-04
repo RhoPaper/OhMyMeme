@@ -370,7 +370,7 @@ function renderMemeCard(m) {
   if (animateInGrid) {
     img.src = '/api/original/' + m.id + '/' + encodeURIComponent(m.filename);
   } else {
-    img.src = '/api/thumb/' + m.id + '/' + encodeURIComponent(m.filename);
+    img.src = '/api/thumb/' + m.file_hash;
   }
   if (m.is_animated && m.hover_to_play) {
     setupHoverPlay(card, img, m.id, m.filename);
@@ -1806,7 +1806,7 @@ function cbMemeCard(m, side) {
   if (animateInGrid) {
     img.src = '/api/original/' + m.id + '/' + encodeURIComponent(m.filename);
   } else {
-    img.src = '/api/thumb/' + m.id + '/' + encodeURIComponent(m.filename);
+    img.src = '/api/thumb/' + m.file_hash;
   }
   if (m.is_animated && m.hover_to_play) {
     setupHoverPlay(card, img, m.id, m.filename);

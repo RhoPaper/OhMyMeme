@@ -179,6 +179,32 @@ def _split_asset_tags(tags: str):
     return "\n".join(links), "\n".join(scripts)
 
 
+def _frontend_dist_stale() -> bool:
+    # Vue 产物是否比前端源码旧（惰性导入避免与 main 循环引用）
+    try:
+        from .main import frontend_needs_build
+
+        return frontend_needs_build(HTML_DIR.parent.parent)
+    except Exception:
+        return False
+
+
+def _warn_frontend_dist(dist_js):
+    # 前端产物缺失/过期时明确告警：否则界面静默降级或停留在旧版，难以排查
+    if not dist_js.exists():
+        logger.warning(
+            "Vue 前端产物缺失（%s），已回退旧界面，图片与功能可能异常；"
+            "请运行 npm install && npm run build 或检查 node/npm 环境",
+            dist_js,
+        )
+    elif _frontend_dist_stale():
+        logger.warning(
+            "Vue 前端产物已过期（前端源码更新后未重新构建，%s）；"
+            "界面可能与后端接口不符，请运行 npm run build",
+            dist_js,
+        )
+
+
 def _make_plugin_route_cb(pid: str, rule: str, fn):
     """插件自定义路由回调：返回 str 或 dict（JSON），Content-Type 按扩展名推断"""
     import json as _json
@@ -4610,8 +4636,10 @@ class WebUI:
         @app.route("/")
         def index():
             vue_html = HTML_DIR / "vue.html"
+            dist_js = HTML_DIR / "dist" / "ohmymeme.js"
             # 仅当 vue.html 与构建产物都存在时才走 Vue 前端，否则回退旧 index.html
-            if vue_html.exists() and (HTML_DIR / "dist" / "ohmymeme.js").exists():
+            if vue_html.exists() and dist_js.exists():
+                _warn_frontend_dist(dist_js)
                 tags = get_plugin_manager().asset_tags("main")
                 if tags:
                     try:
@@ -4622,6 +4650,7 @@ class WebUI:
                     except OSError as e:
                         logger.warning(f"vue.html 读取失败回退静态: {e}")
                 return bottle.static_file("vue.html", root=str(HTML_DIR))
+            _warn_frontend_dist(dist_js)
             html_path = HTML_DIR / "index.html"
             if html_path.exists():
                 return bottle.static_file("index.html", root=str(HTML_DIR))

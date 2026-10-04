@@ -25,37 +25,93 @@ from .webui import WebUI
 logger = logging.getLogger(__name__)
 
 
-def _ensure_vue_frontend():
-    """源码运行且 Vue 构建产物缺失时自动编译一次前端（打包环境跳过）"""
-    if getattr(sys, "frozen", False):
-        return
-    root = Path(__file__).resolve().parent.parent
-    dist_js = root / "src" / "webui" / "dist" / "ohmymeme.js"
-    if dist_js.exists():
-        return
-    if not (root / "package.json").exists():
-        return
-    logger.info("Vue 构建产物缺失，自动编译前端（npx vite build）...")
+_FRONTEND_BUILD_TIMEOUT = 900
+
+
+def frontend_dist_path(root: Path) -> Path:
+    """Vue 前端构建产物路径"""
+    return Path(root) / "src" / "webui" / "dist" / "ohmymeme.js"
+
+
+def _frontend_src_mtime(root: Path) -> float:
+    # 前端源码与构建配置的最新修改时间（用于判断产物是否过期）
+    latest = 0.0
+    for p in (
+        root / "package.json",
+        root / "package-lock.json",
+        root / "vite.config.ts",
+    ):
+        try:
+            latest = max(latest, p.stat().st_mtime)
+        except OSError:
+            pass
     try:
-        npx = "npx.cmd" if os.name == "nt" else "npx"
+        for f in (root / "src" / "vue-src").rglob("*"):
+            if f.is_file():
+                latest = max(latest, f.stat().st_mtime)
+    except OSError:
+        pass
+    return latest
+
+
+def frontend_needs_build(root) -> bool:
+    """Vue 产物缺失或比前端源码旧时需要（重新）构建"""
+    root = Path(root)
+    try:
+        dist_mtime = frontend_dist_path(root).stat().st_mtime
+    except OSError:
+        return True
+    return _frontend_src_mtime(root) > dist_mtime
+
+
+def _run_frontend_cmd(cmd, root: Path) -> bool:
+    # 执行前端构建命令；失败或超时仅告警返回 False（不阻断启动）
+    try:
         result = subprocess.run(
-            [npx, "vite", "build"],
+            cmd,
             cwd=str(root),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=600,
+            timeout=_FRONTEND_BUILD_TIMEOUT,
         )
-        if result.returncode == 0:
-            logger.info("Vue 前端编译完成 -> %s", dist_js)
-        else:
-            logger.warning(
-                "Vue 自动编译失败: %s",
-                (result.stderr or result.stdout).strip()[-500:],
-            )
     except Exception as e:
-        logger.warning("Vue 自动编译失败: %s", e)
+        logger.warning("Vue 自动编译失败（%s）: %s", " ".join(cmd), e)
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "Vue 自动编译失败（%s）: %s",
+            " ".join(cmd),
+            (result.stderr or result.stdout).strip()[-500:],
+        )
+        return False
+    return True
+
+
+def _ensure_vue_frontend():
+    """源码运行且 Vue 产物缺失/过期时自动装依赖并编译前端（打包环境跳过）"""
+    if getattr(sys, "frozen", False):
+        return
+    root = Path(__file__).resolve().parent.parent
+    if not (root / "package.json").exists():
+        return
+    if not frontend_needs_build(root):
+        return
+    logger.info("Vue 前端产物缺失或已过期，自动编译前端...")
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    npx = "npx.cmd" if os.name == "nt" else "npx"
+    build = [npx, "vite", "build"]
+    lock = root / "package-lock.json"
+    install = [npm, "ci"] if lock.exists() else [npm, "install"]
+    ok = False
+    if (root / "node_modules").exists():
+        ok = _run_frontend_cmd(build, root)
+    # 依赖缺失，或构建失败（package.json 新增依赖但依赖目录未更新）时补装依赖再试一次
+    if not ok and _run_frontend_cmd(install, root):
+        ok = _run_frontend_cmd(build, root)
+    if ok:
+        logger.info("Vue 前端编译完成 -> %s", frontend_dist_path(root))
 
 
 class OhMyMemeApp:

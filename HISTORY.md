@@ -18,6 +18,9 @@
 - **主窗口标题栏按钮改为数据驱动** — 核心按钮按固定 order 渲染（`v-if` 隐藏 + CSS order 定位），为插件按钮与布局约束让出插槽；启动动画视频源/底色改由 `get_init_data` 下发（插件可覆盖），行为不变
 - **个性化插件移除窗口尺寸设置** — `win_width`/`win_height` 不再由插件覆盖（`window` 权限撤销），窗口大小统一走宿主「允许调整窗口大小」开关 + 拖边框调整并持久化；插件升级 v1.1.0
 
+## 修复
+- **源码运行时前端产物过期导致静态图（JPG/PNG）全部不显示** — 现象为 GIF 正常、JPG/PNG 显示为破图：`_ensure_vue_frontend()` 只判断 `dist/ohmymeme.js` **是否存在**（不判断是否比 `src/vue-src/` 旧），一旦产物存在就永不重建，源码更新后界面长期停留在旧构建；旧构建仍请求已废弃的两段式 `/api/thumb/{id}/{文件名}` 路由（`f91c1ef` 改为 `/api/thumb/<sha256>` 时未同步 `webui/index.js`）→ 静态图 404，动图因走 `/api/original/{id}/{文件名}`（路由未变）照常显示。修复：①按 mtime 判定产物过期（`frontend_needs_build`，比对 `src/vue-src/**`、`package.json`、`package-lock.json`、`vite.config.ts`）并自动重建；②已有依赖目录先直接构建，失败或依赖缺失时 `npm ci`/`npm install` 补装依赖后重试一次（覆盖 `package.json` 新增依赖而 `node_modules` 停留在旧 lockfile、构建报模块解析失败被静默吞掉的场景）；③`/` 路由在产物缺失/过期时输出明确告警，不再静默降级或静默使用旧产物；④旧前端 `webui/index.js` 缩略图 URL 同步为 `/api/thumb/{file_hash}`，降级界面不再破图；`tests/test_startup.py` 新增 8 例锁定产物过期判定与构建/补装依赖流程
+
 # v0.6.5
 
 ## 新增功能
